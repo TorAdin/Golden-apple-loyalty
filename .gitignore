@@ -1,0 +1,42 @@
+# Data files (private)
+data/*.xlsx
+data/*.csv
+data/*.pkl
+*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Logs
+*.log
+
+# Environment
+.env
+*.env
