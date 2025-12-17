@@ -4,7 +4,6 @@ openpyxl>=3.1.0
 numpy>=1.24.0
 
 # NLP / Sentiment Analysis
-dostoevsky>=0.6.0
 textblob>=0.17.0
 
 # LLM (optional)
