@@ -41,10 +41,14 @@ def load_and_process_data(file_path=None):
 
 
 @st.cache_data
-def run_sentiment_analysis(_df):
-    """Sentiment analysis (с кэшированием)"""
+def run_sentiment_analysis(_df, _columns_hash=None):
+    """Sentiment analysis (с кэшированием)
+
+    _columns_hash используется для инвалидации кэша при изменении структуры DataFrame
+    """
     analyzer = SentimentAnalyzer()
-    return analyzer.analyze_dataframe(_df)
+    result = analyzer.analyze_dataframe(_df)
+    return result
 
 
 @st.cache_data
@@ -104,8 +108,6 @@ def main():
                 # Приводим к lowercase
                 df.columns = df.columns.str.lower().str.strip()
 
-                # Показываем колонки для отладки
-                st.sidebar.text(f"Колонки: {list(df.columns)[:5]}...")
 
                 # Стандартизация колонок (как в data_loader.py)
                 column_mapping = {
@@ -124,20 +126,12 @@ def main():
                 if 'is_recommended' in df.columns:
                     # Конвертируем True/False/1/0 в числа
                     df['is_recommended'] = df['is_recommended'].map({True: 1, False: 0, 'True': 1, 'False': 0, 1: 1, 0: 0}).fillna(0).astype(int)
-                    st.sidebar.text(f"is_recommended: {df['is_recommended'].mean():.2f}")
-                else:
-                    st.sidebar.warning("is_recommended не найден!")
 
                 if 'stars' in df.columns:
                     df['stars'] = pd.to_numeric(df['stars'], errors='coerce')
-                    st.sidebar.text(f"stars mean: {df['stars'].mean():.2f}")
 
                 # Очищаем данные
                 df = clean_dataframe(df)
-
-                # Дополнительная отладка после sentiment и loyalty
-                st.sidebar.markdown("---")
-                st.sidebar.text("После обработки:")
         else:
             st.info("👆 Загрузите файл data_darling.xlsx через сайдбар слева")
             st.markdown("""
@@ -166,23 +160,19 @@ def main():
     # Обработка
     if run_sentiment:
         with st.spinner("Анализ тональности..."):
-            df = run_sentiment_analysis(df)
-        if 'combined_sentiment' in df.columns:
-            st.sidebar.text(f"sentiment: {df['combined_sentiment'].mean():.3f}")
+            # Передаём хэш колонок для корректной инвалидации кэша
+            columns_hash = hash(tuple(sorted(df.columns.tolist())))
+            df_before = df.copy()  # Сохраняем все колонки до sentiment
+            df_sentiment = run_sentiment_analysis(df, _columns_hash=columns_hash)
+            # Восстанавливаем колонки, которые могли быть потеряны из-за кэша
+            for col in df_before.columns:
+                if col not in df_sentiment.columns:
+                    df_sentiment[col] = df_before[col]
+            df = df_sentiment
 
     if run_loyalty and 'combined_sentiment' in df.columns:
-        # Проверка до loyalty
-        st.sidebar.text(f"BEFORE loyalty - is_rec: {'YES' if 'is_recommended' in df.columns else 'NO'}")
-        if 'is_recommended' in df.columns:
-            st.sidebar.text(f"  is_rec mean: {df['is_recommended'].mean():.2f}")
-
         with st.spinner("Расчёт Loyalty Score..."):
             df = calculate_loyalty(df)
-
-        if 'loyalty_score' in df.columns:
-            st.sidebar.text(f"loyalty: {df['loyalty_score'].mean():.3f}")
-            st.sidebar.text(f"AFTER - is_rec: {'YES' if 'is_recommended' in df.columns else 'NO'}")
-            st.sidebar.text(f"segments: {df['loyalty_segment'].value_counts().to_dict()}")
 
     if run_catch_phrases:
         with st.spinner("Детекция кэтч-фраз..."):
