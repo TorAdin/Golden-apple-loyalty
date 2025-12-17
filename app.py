@@ -101,6 +101,12 @@ def main():
                 # Читаем напрямую из uploaded file
                 df = pd.read_excel(uploaded_file)
 
+                # Приводим к lowercase
+                df.columns = df.columns.str.lower().str.strip()
+
+                # Показываем колонки для отладки
+                st.sidebar.text(f"Колонки: {list(df.columns)[:5]}...")
+
                 # Стандартизация колонок (как в data_loader.py)
                 column_mapping = {
                     'pros': 'pros',
@@ -112,12 +118,16 @@ def main():
                     'producttype': 'product_type',
                     'createddate': 'created_date'
                 }
-                df.columns = df.columns.str.lower().str.strip()
                 df = df.rename(columns=column_mapping)
 
                 # Преобразование типов данных
                 if 'is_recommended' in df.columns:
-                    df['is_recommended'] = pd.to_numeric(df['is_recommended'], errors='coerce').fillna(0).astype(int)
+                    # Конвертируем True/False/1/0 в числа
+                    df['is_recommended'] = df['is_recommended'].map({True: 1, False: 0, 'True': 1, 'False': 0, 1: 1, 0: 0}).fillna(0).astype(int)
+                    st.sidebar.text(f"is_recommended mean: {df['is_recommended'].mean():.2f}")
+                else:
+                    st.sidebar.warning("is_recommended не найден!")
+
                 if 'stars' in df.columns:
                     df['stars'] = pd.to_numeric(df['stars'], errors='coerce')
 
