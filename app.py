@@ -40,28 +40,21 @@ def load_and_process_data(file_path=None):
     return df
 
 
-@st.cache_data
-def run_sentiment_analysis(_df, _columns_hash=None):
-    """Sentiment analysis (с кэшированием)
-
-    _columns_hash используется для инвалидации кэша при изменении структуры DataFrame
-    """
+def run_sentiment_analysis(df):
+    """Sentiment analysis (БЕЗ кэширования для корректной работы с uploaded files)"""
     analyzer = SentimentAnalyzer()
-    result = analyzer.analyze_dataframe(_df)
-    return result
+    return analyzer.analyze_dataframe(df)
 
 
-@st.cache_data
-def calculate_loyalty(_df):
-    """Расчёт Loyalty Score (с кэшированием)"""
+def calculate_loyalty(df):
+    """Расчёт Loyalty Score (БЕЗ кэширования)"""
     scorer = LoyaltyScorer()
-    return scorer.score_dataframe(_df)
+    return scorer.score_dataframe(df)
 
 
-@st.cache_data
-def detect_catch_phrases(_df):
-    """Детекция кэтч-фраз (с кэшированием)"""
-    return analyze_catch_phrases_dataframe(_df)
+def detect_catch_phrases_func(df):
+    """Детекция кэтч-фраз (БЕЗ кэширования)"""
+    return analyze_catch_phrases_dataframe(df)
 
 
 @st.cache_data
@@ -101,37 +94,45 @@ def main():
         )
 
         if uploaded_file is not None:
-            with st.spinner("Загрузка данных..."):
-                # Читаем напрямую из uploaded file
-                df = pd.read_excel(uploaded_file)
+            # Используем session_state для кэширования обработанных данных
+            file_key = f"processed_{uploaded_file.name}_{uploaded_file.size}"
 
-                # Приводим к lowercase
-                df.columns = df.columns.str.lower().str.strip()
+            if file_key not in st.session_state:
+                with st.spinner("Загрузка и обработка данных..."):
+                    # Читаем напрямую из uploaded file
+                    raw_df = pd.read_excel(uploaded_file)
 
+                    # Приводим к lowercase
+                    raw_df.columns = raw_df.columns.str.lower().str.strip()
 
-                # Стандартизация колонок (как в data_loader.py)
-                column_mapping = {
-                    'pros': 'pros',
-                    'cons': 'cons',
-                    'comment': 'comment',
-                    'isrecommended': 'is_recommended',
-                    'stars': 'stars',
-                    'catalogname': 'product_name',
-                    'producttype': 'product_type',
-                    'createddate': 'created_date'
-                }
-                df = df.rename(columns=column_mapping)
+                    # Стандартизация колонок (как в data_loader.py)
+                    column_mapping = {
+                        'pros': 'pros',
+                        'cons': 'cons',
+                        'comment': 'comment',
+                        'isrecommended': 'is_recommended',
+                        'stars': 'stars',
+                        'catalogname': 'product_name',
+                        'producttype': 'product_type',
+                        'createddate': 'created_date'
+                    }
+                    raw_df = raw_df.rename(columns=column_mapping)
 
-                # Преобразование типов данных
-                if 'is_recommended' in df.columns:
-                    # Конвертируем True/False/1/0 в числа
-                    df['is_recommended'] = df['is_recommended'].map({True: 1, False: 0, 'True': 1, 'False': 0, 1: 1, 0: 0}).fillna(0).astype(int)
+                    # Преобразование типов данных
+                    if 'is_recommended' in raw_df.columns:
+                        # Конвертируем True/False/1/0 в числа
+                        raw_df['is_recommended'] = raw_df['is_recommended'].map({True: 1, False: 0, 'True': 1, 'False': 0, 1: 1, 0: 0}).fillna(0).astype(int)
 
-                if 'stars' in df.columns:
-                    df['stars'] = pd.to_numeric(df['stars'], errors='coerce')
+                    if 'stars' in raw_df.columns:
+                        raw_df['stars'] = pd.to_numeric(raw_df['stars'], errors='coerce')
 
-                # Очищаем данные
-                df = clean_dataframe(df)
+                    # Очищаем данные
+                    raw_df = clean_dataframe(raw_df)
+
+                    # Сохраняем в session_state
+                    st.session_state[file_key] = raw_df
+
+            df = st.session_state[file_key].copy()
         else:
             st.info("👆 Загрузите файл data_darling.xlsx через сайдбар слева")
             st.markdown("""
@@ -157,26 +158,30 @@ def main():
     run_loyalty = st.sidebar.checkbox("Рассчитать Loyalty Score", value=True)
     run_catch_phrases = st.sidebar.checkbox("Детекция кэтч-фраз", value=True)
 
-    # Обработка
+    # Обработка с кэшированием в session_state
+    # Создаём уникальный ключ для текущего состояния данных
+    data_hash = hash(tuple(df.columns.tolist()) + (len(df),))
+
     if run_sentiment:
-        with st.spinner("Анализ тональности..."):
-            # Передаём хэш колонок для корректной инвалидации кэша
-            columns_hash = hash(tuple(sorted(df.columns.tolist())))
-            df_before = df.copy()  # Сохраняем все колонки до sentiment
-            df_sentiment = run_sentiment_analysis(df, _columns_hash=columns_hash)
-            # Восстанавливаем колонки, которые могли быть потеряны из-за кэша
-            for col in df_before.columns:
-                if col not in df_sentiment.columns:
-                    df_sentiment[col] = df_before[col]
-            df = df_sentiment
+        sentiment_key = f"sentiment_{data_hash}"
+        if sentiment_key not in st.session_state:
+            with st.spinner("Анализ тональности..."):
+                st.session_state[sentiment_key] = run_sentiment_analysis(df)
+        df = st.session_state[sentiment_key].copy()
 
     if run_loyalty and 'combined_sentiment' in df.columns:
-        with st.spinner("Расчёт Loyalty Score..."):
-            df = calculate_loyalty(df)
+        loyalty_key = f"loyalty_{data_hash}"
+        if loyalty_key not in st.session_state:
+            with st.spinner("Расчёт Loyalty Score..."):
+                st.session_state[loyalty_key] = calculate_loyalty(df)
+        df = st.session_state[loyalty_key].copy()
 
     if run_catch_phrases:
-        with st.spinner("Детекция кэтч-фраз..."):
-            df = detect_catch_phrases(df)
+        catch_key = f"catch_{data_hash}"
+        if catch_key not in st.session_state:
+            with st.spinner("Детекция кэтч-фраз..."):
+                st.session_state[catch_key] = detect_catch_phrases_func(df)
+        df = st.session_state[catch_key].copy()
 
     # Фильтры
     st.sidebar.header("🔍 Фильтры")
