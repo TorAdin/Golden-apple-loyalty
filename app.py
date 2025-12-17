@@ -171,11 +171,17 @@ def main():
             st.sidebar.text(f"sentiment: {df['combined_sentiment'].mean():.3f}")
 
     if run_loyalty and 'combined_sentiment' in df.columns:
+        # Проверка до loyalty
+        st.sidebar.text(f"BEFORE loyalty - is_rec: {'YES' if 'is_recommended' in df.columns else 'NO'}")
+        if 'is_recommended' in df.columns:
+            st.sidebar.text(f"  is_rec mean: {df['is_recommended'].mean():.2f}")
+
         with st.spinner("Расчёт Loyalty Score..."):
             df = calculate_loyalty(df)
+
         if 'loyalty_score' in df.columns:
             st.sidebar.text(f"loyalty: {df['loyalty_score'].mean():.3f}")
-            st.sidebar.text(f"is_rec after: {df['is_recommended'].mean():.2f}" if 'is_recommended' in df.columns else "NO is_rec!")
+            st.sidebar.text(f"AFTER - is_rec: {'YES' if 'is_recommended' in df.columns else 'NO'}")
             st.sidebar.text(f"segments: {df['loyalty_segment'].value_counts().to_dict()}")
 
     if run_catch_phrases:
