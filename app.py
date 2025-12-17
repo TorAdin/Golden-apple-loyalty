@@ -717,12 +717,15 @@ def main():
             )
 
         with col2:
-            if 'loyalty_score' in df.columns:
-                summary = df.groupby('loyalty_segment').agg({
-                    'loyalty_score': ['count', 'mean'],
-                    'stars': 'mean',
-                    'is_recommended': 'mean'
-                }).round(3)
+            if 'loyalty_score' in df.columns and 'loyalty_segment' in df.columns:
+                # Строим agg dict только из существующих колонок
+                agg_dict = {'loyalty_score': ['count', 'mean']}
+                if 'stars' in df.columns:
+                    agg_dict['stars'] = 'mean'
+                if 'is_recommended' in df.columns:
+                    agg_dict['is_recommended'] = 'mean'
+
+                summary = df.groupby('loyalty_segment').agg(agg_dict).round(3)
                 summary_csv = summary.to_csv().encode('utf-8')
                 st.download_button(
                     "📥 Скачать сводку",
