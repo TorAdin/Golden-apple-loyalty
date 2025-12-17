@@ -175,6 +175,7 @@ def main():
             df = calculate_loyalty(df)
         if 'loyalty_score' in df.columns:
             st.sidebar.text(f"loyalty: {df['loyalty_score'].mean():.3f}")
+            st.sidebar.text(f"is_rec after: {df['is_recommended'].mean():.2f}" if 'is_recommended' in df.columns else "NO is_rec!")
             st.sidebar.text(f"segments: {df['loyalty_segment'].value_counts().to_dict()}")
 
     if run_catch_phrases:
