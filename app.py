@@ -28,6 +28,8 @@ from src.data_loader import load_data, get_data_info
 from src.preprocessing import clean_dataframe
 from src.sentiment_analyzer import SentimentAnalyzer
 from src.loyalty_scorer import LoyaltyScorer
+from src.catch_phrases import analyze_catch_phrases_dataframe, get_catch_phrase_summary
+from src.llm_sentiment import LLMSentimentAnalyzer, compare_sentiments
 
 
 @st.cache_data
@@ -50,6 +52,21 @@ def calculate_loyalty(_df):
     """Расчёт Loyalty Score (с кэшированием)"""
     scorer = LoyaltyScorer()
     return scorer.score_dataframe(_df)
+
+
+@st.cache_data
+def detect_catch_phrases(_df):
+    """Детекция кэтч-фраз (с кэшированием)"""
+    return analyze_catch_phrases_dataframe(_df)
+
+
+@st.cache_data
+def run_llm_sentiment(_df, sample_size, api_key):
+    """LLM Sentiment Analysis (с кэшированием)"""
+    analyzer = LLMSentimentAnalyzer(api_key=api_key)
+    if analyzer.is_available():
+        return analyzer.analyze_dataframe(_df, sample_size=sample_size)
+    return _df
 
 
 def main():
@@ -77,15 +94,20 @@ def main():
     # Опции анализа
     run_sentiment = st.sidebar.checkbox("Запустить Sentiment Analysis", value=True)
     run_loyalty = st.sidebar.checkbox("Рассчитать Loyalty Score", value=True)
+    run_catch_phrases = st.sidebar.checkbox("Детекция кэтч-фраз", value=True)
 
     # Обработка
     if run_sentiment:
-        with st.spinner("Анализ тональности... (это может занять несколько минут)"):
+        with st.spinner("Анализ тональности..."):
             df = run_sentiment_analysis(df)
 
     if run_loyalty and 'combined_sentiment' in df.columns:
         with st.spinner("Расчёт Loyalty Score..."):
             df = calculate_loyalty(df)
+
+    if run_catch_phrases:
+        with st.spinner("Детекция кэтч-фраз..."):
+            df = detect_catch_phrases(df)
 
     # Фильтры
     st.sidebar.header("🔍 Фильтры")
@@ -116,7 +138,7 @@ def main():
     # === ОСНОВНОЙ КОНТЕНТ ===
 
     # Вкладки
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Обзор", "📈 Лояльность", "💬 Отзывы", "📋 Данные"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Обзор", "📈 Лояльность", "📦 Товары", "🔄 Кэтч-фразы", "💬 Отзывы", "📋 Данные"])
 
     # === TAB 1: ОБЗОР ===
     with tab1:
@@ -188,24 +210,24 @@ def main():
         if 'loyalty_score' not in df.columns:
             st.warning("Включите расчёт Loyalty Score в настройках")
         else:
-            # Метрики по сегментам
+            # Метрики по сегментам (обновлённые трешхолды)
             col1, col2, col3 = st.columns(3)
 
             segment_counts = df['loyalty_segment'].value_counts()
 
             with col1:
                 loyal_pct = segment_counts.get('loyal', 0) / len(df) * 100
-                st.metric("🟢 Loyal (>0.7)", f"{loyal_pct:.1f}%",
+                st.metric("🟢 Loyal (≥0.9)", f"{loyal_pct:.1f}%",
                          f"{segment_counts.get('loyal', 0):,} отзывов")
 
             with col2:
                 neutral_pct = segment_counts.get('neutral', 0) / len(df) * 100
-                st.metric("🟡 Neutral (0.4-0.7)", f"{neutral_pct:.1f}%",
+                st.metric("🟡 Neutral (0.7-0.9)", f"{neutral_pct:.1f}%",
                          f"{segment_counts.get('neutral', 0):,} отзывов")
 
             with col3:
                 atrisk_pct = segment_counts.get('at_risk', 0) / len(df) * 100
-                st.metric("🔴 At Risk (<0.4)", f"{atrisk_pct:.1f}%",
+                st.metric("🔴 At Risk (<0.7)", f"{atrisk_pct:.1f}%",
                          f"{segment_counts.get('at_risk', 0):,} отзывов")
 
             # Распределение Loyalty Score
@@ -218,8 +240,8 @@ def main():
                     title="Распределение Loyalty Score",
                     color_discrete_sequence=['#4ecdc4']
                 )
-                fig.add_vline(x=0.7, line_dash="dash", line_color="green", annotation_text="Loyal")
-                fig.add_vline(x=0.4, line_dash="dash", line_color="red", annotation_text="At Risk")
+                fig.add_vline(x=0.9, line_dash="dash", line_color="green", annotation_text="Loyal ≥0.9")
+                fig.add_vline(x=0.7, line_dash="dash", line_color="orange", annotation_text="Neutral ≥0.7")
                 st.plotly_chart(fig, use_container_width=True)
 
             with col2:
@@ -236,7 +258,7 @@ def main():
             # Scatter: Sentiment vs Stars
             if 'combined_sentiment' in df.columns and 'stars' in df.columns:
                 st.subheader("Sentiment vs Stars")
-                sample_df = df.sample(min(5000, len(df)))  # Ограничиваем для производительности
+                sample_df = df.sample(min(5000, len(df)))
                 fig = px.scatter(
                     sample_df,
                     x='stars',
@@ -268,8 +290,323 @@ def main():
                 fig.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
 
-    # === TAB 3: ОТЗЫВЫ ===
+            # LLM Sentiment Analysis
+            st.subheader("🤖 LLM Sentiment Analysis (OpenAI)")
+
+            with st.expander("Настройки LLM анализа"):
+                st.markdown("""
+                **LLM анализ** использует GPT для более точной оценки тональности.
+                Он лучше понимает контекст, сарказм и скрытое недовольство.
+
+                Требуется: OpenAI API ключ
+                """)
+
+                api_key = st.text_input("OpenAI API Key:", type="password",
+                                       help="Введите ваш API ключ или установите OPENAI_API_KEY")
+
+                llm_sample = st.slider("Размер выборки для LLM:", 10, 1000, 100,
+                                       help="LLM анализ дорогой, рекомендуется начать с небольшой выборки")
+
+                if st.button("Запустить LLM анализ"):
+                    if api_key:
+                        with st.spinner(f"LLM анализ {llm_sample} отзывов..."):
+                            df_llm = run_llm_sentiment(df, llm_sample, api_key)
+                            st.session_state['df_with_llm'] = df_llm
+                        st.rerun()
+                    else:
+                        st.error("Введите OpenAI API ключ")
+
+            # Показываем результаты LLM, если есть
+            if 'df_with_llm' in st.session_state:
+                df_llm = st.session_state['df_with_llm']
+                if 'llm_sentiment_score' in df_llm.columns:
+                    # Считаем статистику напрямую
+                    llm_analyzed = df_llm['llm_sentiment_score'].notna().sum()
+
+                    if llm_analyzed > 0:
+                        st.markdown(f"**Результаты LLM анализа ({llm_analyzed} отзывов):**")
+                        col1, col2, col3, col4 = st.columns(4)
+
+                        mask = df_llm['llm_sentiment_score'].notna()
+                        llm_mean = df_llm.loc[mask, 'llm_sentiment_score'].mean()
+                        keyword_mean = df_llm.loc[mask, 'combined_sentiment'].mean() if 'combined_sentiment' in df_llm.columns else 0
+
+                        with col1:
+                            st.metric("Проанализировано", f"{llm_analyzed}")
+                        with col2:
+                            st.metric("LLM Sentiment (avg)", f"{llm_mean:.3f}")
+                        with col3:
+                            st.metric("Keyword Sentiment (avg)", f"{keyword_mean:.3f}")
+                        with col4:
+                            diff = llm_mean - keyword_mean
+                            st.metric("Разница", f"{diff:+.3f}")
+
+                        # Scatter: Keyword vs LLM
+                        mask = df_llm['llm_sentiment_score'].notna()
+                        if mask.sum() > 0:
+                            col1, col2 = st.columns(2)
+
+                            with col1:
+                                fig = px.scatter(
+                                    df_llm[mask],
+                                    x='combined_sentiment',
+                                    y='llm_sentiment_score',
+                                    color='loyalty_segment' if 'loyalty_segment' in df_llm.columns else None,
+                                    title="Keyword vs LLM Sentiment",
+                                    labels={'combined_sentiment': 'Keyword Sentiment', 'llm_sentiment_score': 'LLM Sentiment'},
+                                    opacity=0.6
+                                )
+                                fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                                             line=dict(color="gray", dash="dash"))
+                                st.plotly_chart(fig, use_container_width=True)
+
+                            with col2:
+                                # Распределение LLM sentiment
+                                fig = px.histogram(
+                                    df_llm[mask],
+                                    x='llm_sentiment_score',
+                                    nbins=20,
+                                    title="Распределение LLM Sentiment",
+                                    color_discrete_sequence=['#4ecdc4']
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+
+                            # Примеры отзывов с LLM оценками
+                            st.markdown("**Примеры LLM анализа:**")
+                            sample_llm = df_llm[mask].sample(min(10, mask.sum()))
+                            display_cols = ['product_name', 'llm_sentiment_score', 'combined_sentiment', 'pros', 'cons']
+                            display_cols = [c for c in display_cols if c in sample_llm.columns]
+                            st.dataframe(sample_llm[display_cols].round(3), use_container_width=True, hide_index=True)
+
+    # === TAB 3: ТОВАРЫ (НОВАЯ ВКЛАДКА) ===
     with tab3:
+        st.header("📦 Агрегация по товарам")
+
+        if 'product_name' not in df.columns:
+            st.warning("Колонка product_name не найдена")
+        else:
+            # Агрегация по товарам
+            agg_dict = {
+                'stars': ['mean', 'count'],
+                'is_recommended': 'mean',
+                'product_type': 'first'
+            }
+            if 'loyalty_score' in df.columns:
+                agg_dict['loyalty_score'] = ['mean', 'std']
+            if 'combined_sentiment' in df.columns:
+                agg_dict['combined_sentiment'] = 'mean'
+
+            product_agg = df.groupby('product_name').agg(agg_dict).round(3)
+
+            # Flatten column names
+            product_agg.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in product_agg.columns.values]
+            product_agg = product_agg.reset_index()
+
+            # Rename columns
+            rename_map = {
+                'loyalty_score_mean': 'avg_loyalty',
+                'loyalty_score_std': 'std_loyalty',
+                'stars_mean': 'avg_stars',
+                'stars_count': 'reviews_count',
+                'is_recommended_mean': 'recommend_rate',
+                'combined_sentiment_mean': 'avg_sentiment',
+                'product_type_first': 'category'
+            }
+            product_agg = product_agg.rename(columns={k: v for k, v in rename_map.items() if k in product_agg.columns})
+
+            # Фильтр по минимальному количеству отзывов
+            min_reviews = st.slider("Минимум отзывов на товар", 1, 100, 10)
+            if 'reviews_count' in product_agg.columns:
+                product_agg = product_agg[product_agg['reviews_count'] >= min_reviews]
+
+            st.markdown(f"**Товаров с ≥{min_reviews} отзывов: {len(product_agg):,}**")
+
+            # Метрики
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Всего товаров", f"{len(product_agg):,}")
+            with col2:
+                if 'avg_loyalty' in product_agg.columns:
+                    st.metric("Средний Loyalty", f"{product_agg['avg_loyalty'].mean():.3f}")
+            with col3:
+                if 'avg_stars' in product_agg.columns:
+                    st.metric("Средний Stars", f"{product_agg['avg_stars'].mean():.2f}")
+            with col4:
+                if 'recommend_rate' in product_agg.columns:
+                    st.metric("Средний Recommend", f"{product_agg['recommend_rate'].mean()*100:.1f}%")
+
+            # Топ и худшие товары
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("🏆 Топ товары по лояльности")
+                if 'avg_loyalty' in product_agg.columns:
+                    top_products = product_agg.nlargest(10, 'avg_loyalty')[
+                        ['product_name', 'avg_loyalty', 'avg_stars', 'reviews_count', 'category']
+                    ]
+                    st.dataframe(top_products, use_container_width=True, hide_index=True)
+
+            with col2:
+                st.subheader("⚠️ Проблемные товары")
+                if 'avg_loyalty' in product_agg.columns:
+                    bottom_products = product_agg.nsmallest(10, 'avg_loyalty')[
+                        ['product_name', 'avg_loyalty', 'avg_stars', 'reviews_count', 'category']
+                    ]
+                    st.dataframe(bottom_products, use_container_width=True, hide_index=True)
+
+            # График: Loyalty vs Stars по товарам
+            if 'avg_loyalty' in product_agg.columns and 'avg_stars' in product_agg.columns:
+                st.subheader("Loyalty vs Stars по товарам")
+                fig = px.scatter(
+                    product_agg,
+                    x='avg_stars',
+                    y='avg_loyalty',
+                    size='reviews_count',
+                    color='category' if 'category' in product_agg.columns else None,
+                    hover_name='product_name',
+                    title="Каждая точка — товар (размер = кол-во отзывов)",
+                    opacity=0.6
+                )
+                fig.add_hline(y=0.9, line_dash="dash", line_color="green", annotation_text="Loyal")
+                fig.add_hline(y=0.7, line_dash="dash", line_color="orange", annotation_text="Neutral")
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Поиск товара
+            st.subheader("🔍 Поиск товара")
+            search_query = st.text_input("Введите название товара:")
+            if search_query:
+                found = product_agg[product_agg['product_name'].str.contains(search_query, case=False, na=False)]
+                if len(found) > 0:
+                    st.dataframe(found, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Товар не найден")
+
+            # Скачать агрегацию
+            st.subheader("📥 Экспорт")
+            csv = product_agg.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "Скачать агрегацию по товарам (CSV)",
+                csv,
+                "products_loyalty.csv",
+                "text/csv"
+            )
+
+    # === TAB 4: КЭТЧ-ФРАЗЫ ===
+    with tab4:
+        st.header("🔄 Кэтч-фразы (индикаторы повторной покупки)")
+
+        if 'has_catch_phrase' not in df.columns:
+            st.warning("Включите детекцию кэтч-фраз в настройках")
+        else:
+            # Сводка
+            summary = get_catch_phrase_summary(df)
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Отзывов с кэтч-фразами",
+                         f"{summary.get('reviews_with_phrases', 0):,}",
+                         f"{summary.get('percent_with_phrases', 0):.1f}%")
+
+            with col2:
+                if 'avg_loyalty_with_phrase' in summary:
+                    diff = summary['avg_loyalty_with_phrase'] - summary['avg_loyalty_without_phrase']
+                    st.metric("Лояльность с фразами",
+                             f"{summary['avg_loyalty_with_phrase']:.3f}",
+                             f"+{diff:.3f}" if diff > 0 else f"{diff:.3f}")
+
+            with col3:
+                if 'avg_loyalty_without_phrase' in summary:
+                    st.metric("Лояльность без фраз",
+                             f"{summary['avg_loyalty_without_phrase']:.3f}")
+
+            with col4:
+                total_phrases = sum(len(p) for p in df['catch_phrases'] if p)
+                st.metric("Всего найдено фраз", f"{total_phrases:,}")
+
+            # Топ фразы
+            if 'top_phrases' in summary:
+                st.subheader("🏆 Топ кэтч-фразы")
+                phrase_df = pd.DataFrame([
+                    {'Фраза': phrase, 'Количество': count}
+                    for phrase, count in summary['top_phrases'].items()
+                ])
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    fig = px.bar(
+                        phrase_df,
+                        x='Количество',
+                        y='Фраза',
+                        orientation='h',
+                        title="Популярные индикаторы повторной покупки",
+                        color='Количество',
+                        color_continuous_scale='Greens'
+                    )
+                    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+                    st.plotly_chart(fig, use_container_width=True)
+                with col2:
+                    st.dataframe(phrase_df, use_container_width=True, hide_index=True)
+
+            # Примеры отзывов с кэтч-фразами
+            st.subheader("📝 Примеры отзывов с кэтч-фразами")
+            catch_df = df[df['has_catch_phrase'] == True]
+
+            if len(catch_df) > 0:
+                n_samples = st.slider("Показать примеров:", 5, 30, 10, key="catch_samples")
+                sample_catch = catch_df.sample(min(n_samples, len(catch_df)))
+
+                for idx, row in sample_catch.iterrows():
+                    phrases_str = ', '.join(row['catch_phrases']) if row['catch_phrases'] else '-'
+                    with st.expander(f"⭐ {row.get('stars', 'N/A')} | Фразы: {phrases_str}"):
+                        cols = st.columns([1, 2])
+                        with cols[0]:
+                            st.markdown(f"**Продукт:** {row.get('product_name', 'N/A')[:50]}")
+                            st.markdown(f"**Категория:** {row.get('product_type', 'N/A')}")
+                            st.markdown(f"**Loyalty:** {row.get('loyalty_score', 0):.3f}")
+                            st.markdown(f"**Найденные фразы:** `{phrases_str}`")
+                        with cols[1]:
+                            st.markdown("**Плюсы:**")
+                            st.write(row.get('pros', '-') or '-')
+                            st.markdown("**Комментарий:**")
+                            st.write(row.get('comment', '-') or '-')
+
+            # Связь с лояльностью
+            if 'loyalty_score' in df.columns:
+                st.subheader("📊 Связь кэтч-фраз с лояльностью")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    # Box plot
+                    fig = px.box(
+                        df,
+                        x='has_catch_phrase',
+                        y='loyalty_score',
+                        color='has_catch_phrase',
+                        title="Распределение Loyalty Score",
+                        labels={'has_catch_phrase': 'Есть кэтч-фраза', 'loyalty_score': 'Loyalty Score'},
+                        color_discrete_map={True: '#51cf66', False: '#868e96'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with col2:
+                    # Распределение по сегментам
+                    if 'loyalty_segment' in df.columns:
+                        seg_phrase = df.groupby(['loyalty_segment', 'has_catch_phrase']).size().unstack(fill_value=0)
+                        seg_phrase_pct = seg_phrase.div(seg_phrase.sum(axis=1), axis=0) * 100
+                        fig = px.bar(
+                            seg_phrase_pct.reset_index(),
+                            x='loyalty_segment',
+                            y=[True, False] if True in seg_phrase_pct.columns else seg_phrase_pct.columns.tolist(),
+                            title="% отзывов с кэтч-фразами по сегментам",
+                            barmode='group',
+                            labels={'value': '% отзывов', 'loyalty_segment': 'Сегмент'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+    # === TAB 5: ОТЗЫВЫ ===
+    with tab5:
         st.header("Примеры отзывов")
 
         # Фильтр по сегменту
@@ -305,6 +642,9 @@ def main():
                     if 'detected_language' in row:
                         st.markdown(f"**Язык:** {row['detected_language']}")
                     st.markdown(f"**Категория:** {row.get('product_type', 'N/A')}")
+                    if 'has_catch_phrase' in row and row['has_catch_phrase']:
+                        phrases = ', '.join(row['catch_phrases']) if row.get('catch_phrases') else ''
+                        st.markdown(f"**🔄 Кэтч-фразы:** `{phrases}`")
 
                 with cols[2]:
                     st.markdown("**Плюсы:**")
@@ -315,13 +655,13 @@ def main():
                         st.markdown("**Комментарий:**")
                         st.write(row.get('comment', '-'))
 
-    # === TAB 4: ДАННЫЕ ===
-    with tab4:
+    # === TAB 6: ДАННЫЕ ===
+    with tab6:
         st.header("Данные")
 
         # Выбор колонок
         available_cols = df.columns.tolist()
-        default_cols = ['product_name', 'stars', 'is_recommended', 'loyalty_score', 'loyalty_segment', 'pros', 'cons']
+        default_cols = ['product_name', 'stars', 'is_recommended', 'loyalty_score', 'loyalty_segment', 'has_catch_phrase', 'catch_phrases', 'pros', 'cons']
         default_cols = [c for c in default_cols if c in available_cols]
 
         selected_cols = st.multiselect("Выберите колонки:", available_cols, default=default_cols)

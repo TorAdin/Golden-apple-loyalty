@@ -169,7 +169,7 @@ class SentimentAnalyzer:
                         df.loc[idx, 'detected_language'] = fast_detect_language(str(text))
                         break
 
-        print(f"✓ Sentiment analysis завершён!")
+        print(f"[OK] Sentiment analysis завершён!")
         return df
 
     def get_sentiment_score(self, text: str) -> float:

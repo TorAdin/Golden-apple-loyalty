@@ -37,8 +37,8 @@ class LoyaltyScorer:
     """
 
     # Границы сегментов лояльности
-    LOYAL_THRESHOLD = 0.70
-    NEUTRAL_THRESHOLD = 0.40
+    LOYAL_THRESHOLD = 0.90      # >= 0.9 = loyal
+    NEUTRAL_THRESHOLD = 0.70    # 0.7-0.9 = neutral, < 0.7 = at_risk
 
     def __init__(self, weights: Optional[LoyaltyWeights] = None):
         """
