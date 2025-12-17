@@ -361,7 +361,12 @@ def main():
                     color='loyalty_score',
                     color_continuous_scale='RdYlGn'
                 )
-                fig.update_layout(xaxis_tickangle=-45)
+                # Убираем ось Y - цвет уже показывает лояльность
+                fig.update_layout(
+                    xaxis_tickangle=-45,
+                    yaxis_visible=False,
+                    yaxis_showticklabels=False
+                )
                 st.plotly_chart(fig, use_container_width=True)
 
             # LLM Sentiment Analysis
@@ -461,18 +466,20 @@ def main():
         elif 'stars' not in df.columns:
             st.warning("Колонка stars не найдена")
         else:
-            # Агрегация по товарам - только существующие колонки
+            # Агрегация по товарам - группируем по названию + категории, чтобы избежать дубликатов
+            group_cols = ['product_name']
+            if 'product_type' in df.columns:
+                group_cols.append('product_type')
+
             agg_dict = {'stars': ['mean', 'count']}
             if 'is_recommended' in df.columns:
                 agg_dict['is_recommended'] = 'mean'
-            if 'product_type' in df.columns:
-                agg_dict['product_type'] = 'first'
             if 'loyalty_score' in df.columns:
                 agg_dict['loyalty_score'] = ['mean', 'std']
             if 'combined_sentiment' in df.columns:
                 agg_dict['combined_sentiment'] = 'mean'
 
-            product_agg = df.groupby('product_name').agg(agg_dict).round(3)
+            product_agg = df.groupby(group_cols).agg(agg_dict).round(3)
 
             # Flatten column names
             product_agg.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in product_agg.columns.values]
@@ -486,7 +493,7 @@ def main():
                 'stars_count': 'reviews_count',
                 'is_recommended_mean': 'recommend_rate',
                 'combined_sentiment_mean': 'avg_sentiment',
-                'product_type_first': 'category'
+                'product_type': 'category'
             }
             product_agg = product_agg.rename(columns={k: v for k, v in rename_map.items() if k in product_agg.columns})
 
