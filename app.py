@@ -417,13 +417,15 @@ def main():
 
         if 'product_name' not in df.columns:
             st.warning("Колонка product_name не найдена")
+        elif 'stars' not in df.columns:
+            st.warning("Колонка stars не найдена")
         else:
-            # Агрегация по товарам
-            agg_dict = {
-                'stars': ['mean', 'count'],
-                'is_recommended': 'mean',
-                'product_type': 'first'
-            }
+            # Агрегация по товарам - только существующие колонки
+            agg_dict = {'stars': ['mean', 'count']}
+            if 'is_recommended' in df.columns:
+                agg_dict['is_recommended'] = 'mean'
+            if 'product_type' in df.columns:
+                agg_dict['product_type'] = 'first'
             if 'loyalty_score' in df.columns:
                 agg_dict['loyalty_score'] = ['mean', 'std']
             if 'combined_sentiment' in df.columns:
@@ -475,17 +477,15 @@ def main():
             with col1:
                 st.subheader("🏆 Топ товары по лояльности")
                 if 'avg_loyalty' in product_agg.columns:
-                    top_products = product_agg.nlargest(10, 'avg_loyalty')[
-                        ['product_name', 'avg_loyalty', 'avg_stars', 'reviews_count', 'category']
-                    ]
+                    display_cols = [c for c in ['product_name', 'avg_loyalty', 'avg_stars', 'reviews_count', 'category'] if c in product_agg.columns]
+                    top_products = product_agg.nlargest(10, 'avg_loyalty')[display_cols]
                     st.dataframe(top_products, use_container_width=True, hide_index=True)
 
             with col2:
                 st.subheader("⚠️ Проблемные товары")
                 if 'avg_loyalty' in product_agg.columns:
-                    bottom_products = product_agg.nsmallest(10, 'avg_loyalty')[
-                        ['product_name', 'avg_loyalty', 'avg_stars', 'reviews_count', 'category']
-                    ]
+                    display_cols = [c for c in ['product_name', 'avg_loyalty', 'avg_stars', 'reviews_count', 'category'] if c in product_agg.columns]
+                    bottom_products = product_agg.nsmallest(10, 'avg_loyalty')[display_cols]
                     st.dataframe(bottom_products, use_container_width=True, hide_index=True)
 
             # График: Loyalty vs Stars по товарам
@@ -495,14 +495,14 @@ def main():
                     product_agg,
                     x='avg_stars',
                     y='avg_loyalty',
-                    size='reviews_count',
+                    size='reviews_count' if 'reviews_count' in product_agg.columns else None,
                     color='category' if 'category' in product_agg.columns else None,
                     hover_name='product_name',
                     title="Каждая точка — товар (размер = кол-во отзывов)",
                     opacity=0.6
                 )
-                fig.add_hline(y=0.9, line_dash="dash", line_color="green", annotation_text="Loyal")
-                fig.add_hline(y=0.7, line_dash="dash", line_color="orange", annotation_text="Neutral")
+                fig.add_hline(y=0.7, line_dash="dash", line_color="green", annotation_text="Loyal")
+                fig.add_hline(y=0.4, line_dash="dash", line_color="orange", annotation_text="Neutral")
                 st.plotly_chart(fig, use_container_width=True)
 
             # Поиск товара
