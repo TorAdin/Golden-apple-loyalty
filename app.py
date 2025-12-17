@@ -100,8 +100,27 @@ def main():
             with st.spinner("Загрузка данных..."):
                 # Читаем напрямую из uploaded file
                 df = pd.read_excel(uploaded_file)
-                # Нормализуем названия колонок
+
+                # Стандартизация колонок (как в data_loader.py)
+                column_mapping = {
+                    'pros': 'pros',
+                    'cons': 'cons',
+                    'comment': 'comment',
+                    'isrecommended': 'is_recommended',
+                    'stars': 'stars',
+                    'catalogname': 'product_name',
+                    'producttype': 'product_type',
+                    'createddate': 'created_date'
+                }
                 df.columns = df.columns.str.lower().str.strip()
+                df = df.rename(columns=column_mapping)
+
+                # Преобразование типов данных
+                if 'is_recommended' in df.columns:
+                    df['is_recommended'] = pd.to_numeric(df['is_recommended'], errors='coerce').fillna(0).astype(int)
+                if 'stars' in df.columns:
+                    df['stars'] = pd.to_numeric(df['stars'], errors='coerce')
+
                 # Очищаем данные
                 df = clean_dataframe(df)
         else:
@@ -501,8 +520,8 @@ def main():
                     title="Каждая точка — товар (размер = кол-во отзывов)",
                     opacity=0.6
                 )
-                fig.add_hline(y=0.7, line_dash="dash", line_color="green", annotation_text="Loyal")
-                fig.add_hline(y=0.4, line_dash="dash", line_color="orange", annotation_text="Neutral")
+                fig.add_hline(y=0.9, line_dash="dash", line_color="green", annotation_text="Loyal")
+                fig.add_hline(y=0.7, line_dash="dash", line_color="orange", annotation_text="Neutral")
                 st.plotly_chart(fig, use_container_width=True)
 
             # Поиск товара
