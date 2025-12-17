@@ -77,17 +77,50 @@ def main():
     # Сайдбар
     st.sidebar.header("⚙️ Настройки")
 
-    # Загрузка данных
+    # Загрузка данных - поддержка локального файла и upload
     data_path = Path(__file__).parent / "data" / "data_darling.xlsx"
 
-    if not data_path.exists():
-        st.error(f"Файл данных не найден: {data_path}")
-        st.info("Поместите data_darling.xlsx в папку data/")
-        return
+    df = None
 
-    # Загружаем данные
-    with st.spinner("Загрузка данных..."):
-        df = load_and_process_data(str(data_path))
+    # Проверяем локальный файл
+    if data_path.exists():
+        with st.spinner("Загрузка данных..."):
+            df = load_and_process_data(str(data_path))
+    else:
+        # Cloud mode - показываем uploader
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📁 Загрузка данных")
+        uploaded_file = st.sidebar.file_uploader(
+            "Загрузите data_darling.xlsx",
+            type=['xlsx'],
+            help="Файл с отзывами в формате Excel"
+        )
+
+        if uploaded_file is not None:
+            with st.spinner("Загрузка данных..."):
+                # Читаем напрямую из uploaded file
+                df = pd.read_excel(uploaded_file)
+                # Нормализуем названия колонок
+                df.columns = df.columns.str.lower().str.strip()
+                # Очищаем данные
+                df = clean_dataframe(df)
+        else:
+            st.info("👆 Загрузите файл data_darling.xlsx через сайдбар слева")
+            st.markdown("""
+            **Ожидаемые колонки в файле:**
+            - `pros` - плюсы товара
+            - `cons` - минусы товара
+            - `comment` - комментарий
+            - `stars` - оценка (1-5)
+            - `isrecommended` - рекомендует ли (True/False)
+            - `product_type` - тип товара
+            - `catalog_name` - название каталога
+            """)
+            return
+
+    if df is None:
+        st.error("Не удалось загрузить данные")
+        return
 
     st.sidebar.success(f"✅ Загружено {len(df):,} отзывов")
 
