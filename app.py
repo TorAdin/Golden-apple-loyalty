@@ -34,10 +34,33 @@ from src.bert_loyalty import BertLoyaltyAnalyzer, compare_with_keyword_method
 
 
 @st.cache_data
-def load_and_process_data(file_path=None):
+def load_and_process_data(file_path=None, csv_advanced_path=None):
     """Загрузка и обработка данных (с кэшированием)"""
     df = load_data(file_path)
     df = clean_dataframe(df)
+
+    # МЕРЖИМ расширенные фичи из CSV если он есть
+    if csv_advanced_path and Path(csv_advanced_path).exists():
+        try:
+            csv_df = pd.read_csv(csv_advanced_path)
+
+            # Список расширенных колонок для мержа
+            advanced_cols = [
+                'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
+                'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
+                'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
+            ]
+
+            # Берём только те колонки которые есть в CSV
+            merge_cols = [col for col in advanced_cols if col in csv_df.columns]
+
+            if merge_cols and len(csv_df) == len(df):
+                # ПРЯМОЕ ДОБАВЛЕНИЕ колонок по индексу (если количество строк совпадает)
+                for col in merge_cols:
+                    df[col] = csv_df[col].values
+        except Exception as e:
+            st.warning(f"⚠️ Не удалось загрузить расширенные фичи: {e}")
+
     return df
 
 
@@ -81,34 +104,22 @@ def main():
 
     df = None
 
-    # Грузим базовый файл
+    # Грузим базовый файл с мержем расширенных фич
     if xlsx_path.exists():
         with st.spinner("Загрузка данных..."):
-            df = load_and_process_data(str(xlsx_path))
+            # Передаём путь к CSV для автоматического мержа расширенных фич
+            csv_path_str = str(csv_advanced_path) if csv_advanced_path.exists() else None
+            df = load_and_process_data(str(xlsx_path), csv_path_str)
 
-        # МЕРЖИМ расширенные фичи из CSV если он есть
-        if csv_advanced_path.exists():
-            try:
-                csv_df = pd.read_csv(csv_advanced_path)
-
-                # Список расширенных колонок для мержа
-                advanced_cols = [
-                    'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
-                    'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
-                    'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
-                ]
-
-                # Берём только те колонки которые есть в CSV
-                merge_cols = [col for col in advanced_cols if col in csv_df.columns]
-
-                if merge_cols and len(csv_df) == len(df):
-                    # ПРЯМОЕ ДОБАВЛЕНИЕ колонок по индексу (если количество строк совпадает)
-                    for col in merge_cols:
-                        df[col] = csv_df[col].values
-
-                    st.sidebar.success(f"✅ Добавлено {len(merge_cols)} расширенных фич")
-            except Exception as e:
-                st.sidebar.warning(f"⚠️ Не удалось загрузить расширенные фичи: {e}")
+        # Проверяем наличие расширенных фич
+        advanced_cols = [
+            'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
+            'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
+            'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
+        ]
+        loaded_advanced = [col for col in advanced_cols if col in df.columns]
+        if loaded_advanced:
+            st.sidebar.success(f"✅ Загружено {len(loaded_advanced)} расширенных фич")
     else:
         # Cloud mode - показываем uploader
         st.sidebar.markdown("---")
