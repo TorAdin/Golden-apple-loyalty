@@ -130,6 +130,13 @@ def main():
             help="Файл с отзывами в формате Excel"
         )
 
+        # Дополнительная загрузка расширенного CSV
+        uploaded_csv = st.sidebar.file_uploader(
+            "Загрузите расширенный датасет (опционально)",
+            type=['csv'],
+            help="Файл final_data_darling.csv с расширенными фичами лояльности"
+        )
+
         if uploaded_file is not None:
             # Используем session_state для кэширования обработанных данных
             file_key = f"processed_{uploaded_file.name}_{uploaded_file.size}"
@@ -170,6 +177,35 @@ def main():
                     st.session_state[file_key] = raw_df
 
             df = st.session_state[file_key].copy()
+
+            # Мерж с расширенными фичами если загружен CSV
+            if uploaded_csv is not None:
+                csv_key = f"csv_{uploaded_csv.name}_{uploaded_csv.size}"
+
+                if csv_key not in st.session_state:
+                    csv_df = pd.read_csv(uploaded_csv)
+                    st.session_state[csv_key] = csv_df
+
+                csv_df = st.session_state[csv_key]
+
+                # Список расширенных колонок для мержа
+                advanced_cols = [
+                    'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
+                    'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
+                    'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
+                ]
+
+                # Берём только те колонки которые есть в CSV
+                merge_cols = [col for col in advanced_cols if col in csv_df.columns]
+
+                if merge_cols and len(csv_df) == len(df):
+                    # ПРЯМОЕ ДОБАВЛЕНИЕ колонок по индексу (если количество строк совпадает)
+                    for col in merge_cols:
+                        df[col] = csv_df[col].values
+
+                    st.sidebar.success(f"✅ Добавлено {len(merge_cols)} расширенных фич из CSV")
+                elif len(csv_df) != len(df):
+                    st.sidebar.warning(f"⚠️ Количество строк не совпадает: XLSX={len(df)}, CSV={len(csv_df)}")
         else:
             st.info("👆 Загрузите файл data_darling.xlsx через сайдбар слева")
             st.markdown("""
