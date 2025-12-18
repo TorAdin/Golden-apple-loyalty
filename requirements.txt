@@ -5,6 +5,9 @@ numpy>=1.24.0
 
 # NLP / Sentiment Analysis
 textblob>=0.17.0
+transformers>=4.30.0
+torch>=2.0.0
+sentencepiece>=0.1.99
 
 # LLM (optional)
 openai>=1.0.0
