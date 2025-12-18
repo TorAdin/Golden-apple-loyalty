@@ -30,6 +30,7 @@ from src.sentiment_analyzer import SentimentAnalyzer
 from src.loyalty_scorer import LoyaltyScorer
 from src.catch_phrases import analyze_catch_phrases_dataframe, get_catch_phrase_summary
 from src.llm_sentiment import LLMSentimentAnalyzer, compare_sentiments
+from src.bert_loyalty import BertLoyaltyAnalyzer, compare_with_keyword_method
 
 
 @st.cache_data
@@ -74,15 +75,40 @@ def main():
     # Сайдбар
     st.sidebar.header("⚙️ Настройки")
 
-    # Загрузка данных - поддержка локального файла и upload
-    data_path = Path(__file__).parent / "data" / "data_darling.xlsx"
+    # Загрузка данных - базовый XLSX + мерж с расширенными фичами из CSV
+    xlsx_path = Path(__file__).parent / "data" / "data_darling.xlsx"
+    csv_advanced_path = Path(__file__).parent / "final_data_darling.csv"
 
     df = None
 
-    # Проверяем локальный файл
-    if data_path.exists():
+    # Грузим базовый файл
+    if xlsx_path.exists():
         with st.spinner("Загрузка данных..."):
-            df = load_and_process_data(str(data_path))
+            df = load_and_process_data(str(xlsx_path))
+
+        # МЕРЖИМ расширенные фичи из CSV если он есть
+        if csv_advanced_path.exists():
+            try:
+                csv_df = pd.read_csv(csv_advanced_path)
+
+                # Список расширенных колонок для мержа
+                advanced_cols = [
+                    'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
+                    'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
+                    'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
+                ]
+
+                # Берём только те колонки которые есть в CSV
+                merge_cols = [col for col in advanced_cols if col in csv_df.columns]
+
+                if merge_cols and len(csv_df) == len(df):
+                    # ПРЯМОЕ ДОБАВЛЕНИЕ колонок по индексу (если количество строк совпадает)
+                    for col in merge_cols:
+                        df[col] = csv_df[col].values
+
+                    st.sidebar.success(f"✅ Добавлено {len(merge_cols)} расширенных фич")
+            except Exception as e:
+                st.sidebar.warning(f"⚠️ Не удалось загрузить расширенные фичи: {e}")
     else:
         # Cloud mode - показываем uploader
         st.sidebar.markdown("---")
@@ -158,6 +184,15 @@ def main():
     run_loyalty = st.sidebar.checkbox("Рассчитать Loyalty Score", value=True)
     run_catch_phrases = st.sidebar.checkbox("Детекция кэтч-фраз", value=True)
 
+    # НОВОЕ: BERT анализ
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🤖 BERT Анализ")
+    run_bert = st.sidebar.checkbox(
+        "🧠 Запустить BERT анализ лояльности",
+        value=False,
+        help="Использует обученную BERT модель для более точного анализа лояльности"
+    )
+
     # Обработка с кэшированием в session_state
     # Создаём уникальный ключ для текущего состояния данных
     data_hash = hash(tuple(df.columns.tolist()) + (len(df),))
@@ -182,6 +217,20 @@ def main():
             with st.spinner("Детекция кэтч-фраз..."):
                 st.session_state[catch_key] = detect_catch_phrases_func(df)
         df = st.session_state[catch_key].copy()
+
+    # BERT анализ
+    if run_bert:
+        bert_key = f"bert_{data_hash}"
+        if bert_key not in st.session_state:
+            with st.spinner("🧠 BERT анализ лояльности (может занять несколько минут)..."):
+                analyzer = BertLoyaltyAnalyzer()
+                if analyzer.is_available():
+                    st.session_state[bert_key] = analyzer.analyze_dataframe(df)
+                    st.success("✅ BERT анализ завершён!")
+                else:
+                    st.error("❌ BERT модель недоступна. Убедитесь, что папка Golden-apple-loyalty/models_binary_fixed_v2 существует")
+                    st.session_state[bert_key] = df
+        df = st.session_state[bert_key].copy()
 
     # Фильтры
     st.sidebar.header("🔍 Фильтры")
@@ -211,8 +260,89 @@ def main():
 
     # === ОСНОВНОЙ КОНТЕНТ ===
 
-    # Вкладки
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Обзор", "📈 Лояльность", "📦 Товары", "🔄 Кэтч-фразы", "💬 Отзывы", "📋 Данные"])
+    # ФИКС: Нормализуем названия расширенных колонок (если есть в lowercase - переименовываем обратно)
+    advanced_col_mapping = {
+        'repurchase_intent_tag': 'Repurchase_Intent_Tag',
+        'abandonment_tag': 'Abandonment_Tag',
+        'misexpectation_type': 'Misexpectation_Type',
+        'advocacy_strength': 'Advocacy_Strength',
+        'price_sensitivity_tag': 'Price_Sensitivity_Tag',
+        'alternative_brand_mentioned': 'Alternative_Brand_Mentioned',
+        'affection_trigger': 'Affection_Trigger',
+        'review_purpose': 'Review_Purpose',
+        'review_emotion_class': 'Review_Emotion_Class'
+    }
+
+    # Переименовываем расширенные колонки из lowercase в правильный формат
+    rename_advanced = {}
+    for lower_name, proper_name in advanced_col_mapping.items():
+        if lower_name in df.columns:
+            rename_advanced[lower_name] = proper_name
+
+    if rename_advanced:
+        df = df.rename(columns=rename_advanced)
+
+    # Проверяем наличие расширенных фич лояльности
+    has_advanced_features = all(col in df.columns for col in [
+        'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Review_Purpose', 'Review_Emotion_Class'
+    ])
+
+    # Отладочная информация в sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔍 Статус данных")
+    st.sidebar.write(f"Всего колонок: {len(df.columns)}")
+
+    # ПОКАЗЫВАЕМ ВСЕ КОЛОНКИ
+    with st.sidebar.expander("📋 Все колонки в данных"):
+        for col in sorted(df.columns):
+            st.write(f"• {col}")
+
+    if has_advanced_features:
+        st.sidebar.success("✅ Расширенные фичи загружены")
+    else:
+        st.sidebar.warning("⚠️ Расширенные фичи не найдены")
+        st.sidebar.write("Ищем колонки:")
+        for col in ['Repurchase_Intent_Tag', 'Abandonment_Tag', 'Review_Purpose', 'Review_Emotion_Class']:
+            if col in df.columns:
+                st.sidebar.write(f"  ✅ {col}")
+            else:
+                st.sidebar.write(f"  ❌ {col}")
+
+    # Вкладки (продвинутый анализ сразу после Обзора)
+    tabs = ["📊 Обзор"]
+
+    # Добавляем продвинутый анализ сразу после Обзора
+    if has_advanced_features:
+        tabs.append("🎯 Продвинутый анализ")
+
+    tabs.extend(["📈 Лояльность", "📦 Товары", "🔄 Кэтч-фразы"])
+
+    # Добавляем BERT вкладку если анализ запущен
+    if 'bert_loyalty_prob' in df.columns:
+        tabs.append("🧠 BERT Анализ")
+
+    tabs.extend(["💬 Отзывы", "📋 Данные"])
+
+    all_tabs = st.tabs(tabs)
+
+    # Распаковываем вкладки (новый порядок: Обзор -> Продвинутый анализ -> Лояльность -> Товары -> Кэтч-фразы -> BERT -> Отзывы -> Данные)
+    tab_idx = 0
+    tab1 = all_tabs[tab_idx]; tab_idx += 1  # Обзор
+
+    # Продвинутый анализ (сразу после Обзора, если есть)
+    if has_advanced_features:
+        tab_advanced = all_tabs[tab_idx]; tab_idx += 1
+
+    tab2 = all_tabs[tab_idx]; tab_idx += 1  # Лояльность
+    tab3 = all_tabs[tab_idx]; tab_idx += 1  # Товары
+    tab4 = all_tabs[tab_idx]; tab_idx += 1  # Кэтч-фразы
+
+    # BERT вкладка (если есть)
+    if 'bert_loyalty_prob' in df.columns:
+        tab_bert = all_tabs[tab_idx]; tab_idx += 1
+
+    tab5 = all_tabs[tab_idx]; tab_idx += 1  # Отзывы
+    tab6 = all_tabs[tab_idx]; tab_idx += 1  # Данные
 
     # === TAB 1: ОБЗОР ===
     with tab1:
@@ -253,12 +383,16 @@ def main():
 
         with col2:
             if 'is_recommended' in df.columns:
-                rec_data = df['is_recommended'].value_counts()
+                rec_data = df['is_recommended'].value_counts().sort_index()
+                # 0 = Не рекомендуют (красный), 1 = Рекомендуют (зелёный)
+                labels = ['Не рекомендуют', 'Рекомендуют'] if 0 in rec_data.index else ['Рекомендуют']
+                colors = ['#ff6b6b', '#51cf66'] if len(rec_data) == 2 else ['#51cf66']
+
                 fig = px.pie(
                     values=rec_data.values,
-                    names=['Не рекомендуют', 'Рекомендуют'],
+                    names=labels,
                     title="Рекомендации",
-                    color_discrete_sequence=['#ff6b6b', '#51cf66']
+                    color_discrete_sequence=colors
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -685,6 +819,633 @@ def main():
                             labels={'value': '% отзывов', 'loyalty_segment': 'Сегмент'}
                         )
                         st.plotly_chart(fig, use_container_width=True)
+
+    # === TAB ADVANCED: ПРОДВИНУТЫЙ АНАЛИЗ ЛОЯЛЬНОСТИ ===
+    if has_advanced_features:
+        with tab_advanced:
+            st.header("🎯 Продвинутый анализ лояльности")
+
+            st.markdown("""
+            **Расширенный анализ факторов лояльности на основе GPT-разметки:**
+            - Намерение повторной покупки и риски оттока
+            - Причины несоответствия ожиданий
+            - Сила адвокации и ценовая чувствительность
+            - Эмоциональные триггеры и цель отзыва
+            """)
+
+            # === 1. REPURCHASE INTENT & ABANDONMENT ===
+            st.subheader("🔄 Намерение повторной покупки vs Риск ухода")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**Repurchase Intent (Намерение купить снова)**")
+                if 'Repurchase_Intent_Tag' in df.columns:
+                    repurchase_counts = df['Repurchase_Intent_Tag'].value_counts()
+                    repurchase_pct = df['Repurchase_Intent_Tag'].value_counts(normalize=True) * 100
+
+                    # Метрики
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        st.metric("Yes", f"{repurchase_counts.get('Yes', 0):,}",
+                                f"{repurchase_pct.get('Yes', 0):.1f}%")
+                    with col_b:
+                        st.metric("Unclear", f"{repurchase_counts.get('Unclear', 0):,}",
+                                f"{repurchase_pct.get('Unclear', 0):.1f}%")
+                    with col_c:
+                        st.metric("No", f"{repurchase_counts.get('No', 0):,}",
+                                f"{repurchase_pct.get('No', 0):.1f}%")
+
+                    # Pie chart
+                    fig = px.pie(
+                        values=repurchase_counts.values,
+                        names=repurchase_counts.index,
+                        title="Распределение намерений повторной покупки",
+                        color=repurchase_counts.index,
+                        color_discrete_map={'Yes': '#51cf66', 'Unclear': '#ffd43b', 'No': '#ff6b6b'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            with col2:
+                st.markdown("**Abandonment (Риск ухода)**")
+                if 'Abandonment_Tag' in df.columns:
+                    abandon_counts = df['Abandonment_Tag'].value_counts()
+                    abandon_pct = df['Abandonment_Tag'].value_counts(normalize=True) * 100
+
+                    # Метрики
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        st.metric("Stay", f"{abandon_counts.get('Stay', 0):,}",
+                                f"{abandon_pct.get('Stay', 0):.1f}%")
+                    with col_b:
+                        st.metric("Considering", f"{abandon_counts.get('Considering_leave', 0):,}",
+                                f"{abandon_pct.get('Considering_leave', 0):.1f}%")
+                    with col_c:
+                        st.metric("Leave", f"{abandon_counts.get('Leave', 0):,}",
+                                f"{abandon_pct.get('Leave', 0):.1f}%")
+
+                    # Pie chart
+                    fig = px.pie(
+                        values=abandon_counts.values,
+                        names=abandon_counts.index,
+                        title="Распределение рисков ухода",
+                        color=abandon_counts.index,
+                        color_discrete_map={'Stay': '#51cf66', 'Considering_leave': '#ffd43b', 'Leave': '#ff6b6b'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # Матрица Repurchase vs Abandonment
+            if 'Repurchase_Intent_Tag' in df.columns and 'Abandonment_Tag' in df.columns:
+                st.subheader("🎯 Матрица: Повторная покупка vs Уход")
+
+                # Создаём сводную таблицу
+                matrix = pd.crosstab(
+                    df['Repurchase_Intent_Tag'],
+                    df['Abandonment_Tag'],
+                    normalize='all'
+                ) * 100
+
+                # Heatmap
+                fig = px.imshow(
+                    matrix,
+                    labels=dict(x="Abandonment", y="Repurchase Intent", color="% отзывов"),
+                    x=matrix.columns,
+                    y=matrix.index,
+                    title="Комбинации намерений (% от всех отзывов)",
+                    color_continuous_scale='RdYlGn',
+                    text_auto='.1f'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Интерпретация ключевых сегментов
+                st.markdown("**📊 Ключевые сегменты:**")
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    # Yes + Stay
+                    yes_stay = ((df['Repurchase_Intent_Tag'] == 'Yes') &
+                              (df['Abandonment_Tag'] == 'Stay')).sum()
+                    st.success(f"✅ **Устойчивая лояльность:** {yes_stay:,} ({yes_stay/len(df)*100:.1f}%)")
+                    st.caption("Купят снова и не ищут альтернативы")
+
+                    # No + Leave
+                    no_leave = ((df['Repurchase_Intent_Tag'] == 'No') &
+                              (df['Abandonment_Tag'] == 'Leave')).sum()
+                    st.error(f"❌ **Критический отток:** {no_leave:,} ({no_leave/len(df)*100:.1f}%)")
+                    st.caption("Не купят и активно уходят")
+
+                with col2:
+                    # Yes + Considering_leave
+                    yes_considering = ((df['Repurchase_Intent_Tag'] == 'Yes') &
+                                     (df['Abandonment_Tag'] == 'Considering_leave')).sum()
+                    st.warning(f"⚠️ **Лояльность под угрозой:** {yes_considering:,} ({yes_considering/len(df)*100:.1f}%)")
+                    st.caption("Купят, но сомневаются")
+
+                    # No + Stay
+                    no_stay = ((df['Repurchase_Intent_Tag'] == 'No') &
+                             (df['Abandonment_Tag'] == 'Stay')).sum()
+                    st.info(f"🔒 **Вынужденная лояльность:** {no_stay:,} ({no_stay/len(df)*100:.1f}%)")
+                    st.caption("Не купят снова, но и не уходят (нет альтернатив)")
+
+            # === 2. MISEXPECTATION TYPE ===
+            st.subheader("💥 Причины несоответствия ожиданий")
+
+            if 'Misexpectation_Type' in df.columns:
+                misexp_counts = df['Misexpectation_Type'].value_counts()
+
+                col1, col2 = st.columns([2, 1])
+
+                with col1:
+                    # Bar chart
+                    fig = px.bar(
+                        x=misexp_counts.index,
+                        y=misexp_counts.values,
+                        title="Распределение причин разочарования",
+                        labels={'x': 'Причина', 'y': 'Количество'},
+                        color=misexp_counts.values,
+                        color_continuous_scale='Reds'
+                    )
+                    fig.update_layout(xaxis_tickangle=-45, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with col2:
+                    st.markdown("**Топ причин:**")
+                    for idx, (reason, count) in enumerate(misexp_counts.head(5).items(), 1):
+                        pct = count / len(df) * 100
+                        st.write(f"{idx}. **{reason}**: {count:,} ({pct:.1f}%)")
+
+                # Связь с Repurchase Intent
+                if 'Repurchase_Intent_Tag' in df.columns:
+                    st.markdown("**Влияние причин на намерение повторной покупки:**")
+
+                    misexp_repurchase = pd.crosstab(
+                        df['Misexpectation_Type'],
+                        df['Repurchase_Intent_Tag'],
+                        normalize='index'
+                    ) * 100
+
+                    fig = px.bar(
+                        misexp_repurchase.reset_index(),
+                        x='Misexpectation_Type',
+                        y=['Yes', 'No', 'Unclear'],
+                        title="% намерений по типам разочарования",
+                        barmode='group',
+                        labels={'value': '% отзывов', 'variable': 'Намерение'}
+                    )
+                    fig.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # === 3. ADVOCACY & PRICE SENSITIVITY ===
+            st.subheader("📣 Сила адвокации и ценовая чувствительность")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if 'Advocacy_Strength' in df.columns:
+                    st.markdown("**Advocacy Strength (Сила рекомендации)**")
+
+                    advocacy_counts = df['Advocacy_Strength'].value_counts()
+
+                    fig = px.funnel(
+                        x=advocacy_counts.values,
+                        y=advocacy_counts.index,
+                        title="Воронка адвокации"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Метрика NPS-style
+                    promoters = advocacy_counts.get('Expert', 0) + advocacy_counts.get('Strong', 0)
+                    detractors = advocacy_counts.get('Detractor', 0)
+                    nps_style = (promoters - detractors) / len(df) * 100
+
+                    st.metric("Advocacy Score (NPS-style)", f"{nps_style:+.1f}%",
+                            help="(Promoters - Detractors) / Total")
+
+            with col2:
+                if 'Price_Sensitivity_Tag' in df.columns:
+                    st.markdown("**Price Sensitivity (Ценовая чувствительность)**")
+
+                    price_sens_counts = df['Price_Sensitivity_Tag'].value_counts()
+
+                    fig = px.pie(
+                        values=price_sens_counts.values,
+                        names=price_sens_counts.index,
+                        title="Распределение ценовой чувствительности",
+                        color=price_sens_counts.index,
+                        color_discrete_map={'low': '#51cf66', 'medium': '#ffd43b', 'high': '#ff6b6b'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Связь с Abandonment
+                    if 'Abandonment_Tag' in df.columns:
+                        high_price_leave = ((df['Price_Sensitivity_Tag'] == 'high') &
+                                          (df['Abandonment_Tag'] == 'Leave')).sum()
+                        st.warning(f"⚠️ High price + Leave: {high_price_leave:,} отзывов")
+
+            # === 4. AFFECTION TRIGGERS ===
+            st.subheader("❤️ Эмоциональные триггеры привязанности")
+
+            if 'Affection_Trigger' in df.columns:
+                # Разбираем множественные триггеры
+                all_triggers = []
+                for triggers_str in df['Affection_Trigger'].dropna():
+                    if pd.notna(triggers_str) and triggers_str != 'none':
+                        all_triggers.extend(str(triggers_str).split(';'))
+
+                if all_triggers:
+                    trigger_counts = pd.Series(all_triggers).value_counts()
+
+                    col1, col2 = st.columns([3, 1])
+
+                    with col1:
+                        fig = px.bar(
+                            x=trigger_counts.index,
+                            y=trigger_counts.values,
+                            title="Что вызывает привязанность к продукту",
+                            labels={'x': 'Триггер', 'y': 'Упоминаний'},
+                            color=trigger_counts.values,
+                            color_continuous_scale='Greens'
+                        )
+                        fig.update_layout(xaxis_tickangle=-45, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    with col2:
+                        st.markdown("**Топ триггеры:**")
+                        for idx, (trigger, count) in enumerate(trigger_counts.head(5).items(), 1):
+                            st.write(f"{idx}. **{trigger}**: {count:,}")
+
+            # === 5. REVIEW PURPOSE & EMOTION ===
+            st.subheader("💭 Цель отзыва и эмоции")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if 'Review_Purpose' in df.columns:
+                    st.markdown("**Review Purpose (Зачем написан отзыв)**")
+
+                    purpose_counts = df['Review_Purpose'].value_counts()
+
+                    fig = px.pie(
+                        values=purpose_counts.values,
+                        names=purpose_counts.index,
+                        title="Распределение целей отзывов",
+                        hole=0.4
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Метрики по типам
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        complain_count = purpose_counts.get('complain', 0)
+                        st.metric("Жалобы", f"{complain_count:,}",
+                                f"{complain_count/len(df)*100:.1f}%")
+                    with col_b:
+                        recommend_count = purpose_counts.get('recommend', 0)
+                        st.metric("Рекомендации", f"{recommend_count:,}",
+                                f"{recommend_count/len(df)*100:.1f}%")
+
+            with col2:
+                if 'Review_Emotion_Class' in df.columns:
+                    st.markdown("**Review Emotion (Доминирующая эмоция)**")
+
+                    emotion_counts = df['Review_Emotion_Class'].value_counts()
+
+                    fig = px.bar(
+                        x=emotion_counts.index,
+                        y=emotion_counts.values,
+                        title="Распределение эмоций в отзывах",
+                        labels={'x': 'Эмоция', 'y': 'Количество'},
+                        color=emotion_counts.index,
+                        color_discrete_map={
+                            'joy': '#51cf66',
+                            'neutral': '#868e96',
+                            'surprise': '#ffd43b',
+                            'disappointment': '#ff922b',
+                            'anger': '#ff6b6b'
+                        }
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # === 6. ALTERNATIVE BRANDS ===
+            if 'Alternative_Brand_Mentioned' in df.columns:
+                st.subheader("🔀 Упоминание альтернативных брендов")
+
+                alt_brand_counts = df['Alternative_Brand_Mentioned'].value_counts()
+
+                col1, col2, col3 = st.columns([1, 2, 1])
+
+                with col2:
+                    fig = px.pie(
+                        values=alt_brand_counts.values,
+                        names=alt_brand_counts.index,
+                        title="Упоминаются ли конкуренты?",
+                        color=alt_brand_counts.index,
+                        color_discrete_map={'Yes': '#ff6b6b', 'No': '#51cf66'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Связь с Abandonment
+                if 'Abandonment_Tag' in df.columns:
+                    st.markdown("**Связь упоминания конкурентов с уходом:**")
+
+                    brand_abandon = pd.crosstab(
+                        df['Alternative_Brand_Mentioned'],
+                        df['Abandonment_Tag'],
+                        normalize='index'
+                    ) * 100
+
+                    fig = px.bar(
+                        brand_abandon.reset_index(),
+                        x='Alternative_Brand_Mentioned',
+                        y=['Stay', 'Considering_leave', 'Leave'],
+                        title="% риска ухода при упоминании конкурентов",
+                        barmode='group'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # === 7. ЭКСПОРТ ===
+            st.subheader("📥 Экспорт расширенных данных")
+
+            advanced_cols = [
+                'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
+                'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
+                'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
+            ]
+            advanced_cols = [col for col in advanced_cols if col in df.columns]
+
+            if 'product_name' in df.columns:
+                advanced_cols.insert(0, 'product_name')
+
+            export_df = df[advanced_cols].copy()
+            csv = export_df.to_csv(index=False).encode('utf-8')
+
+            st.download_button(
+                "📥 Скачать расширенные фичи лояльности (CSV)",
+                csv,
+                "advanced_loyalty_features.csv",
+                "text/csv"
+            )
+
+    # === TAB BERT: BERT АНАЛИЗ ===
+    if 'bert_loyalty_prob' in df.columns:
+        with tab_bert:
+            st.header("🧠 BERT Анализ Лояльности")
+
+            st.markdown("""
+            **О BERT модели:**
+            - Обучена на 600 размеченных вручную отзывах
+            - Использует псевдолейблинг для улучшения качества
+            - Бинарная классификация: лояльный / нелояльный
+            - Три порога уверенности: строгий (0.718), средний (0.55), мягкий (0.40)
+            """)
+
+            # Статистика
+            bert_analyzer = BertLoyaltyAnalyzer()
+            bert_stats = bert_analyzer.get_statistics(df)
+
+            st.subheader("📊 Общая статистика BERT анализа")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Всего отзывов", f"{bert_stats['total_reviews']:,}")
+
+            with col2:
+                st.metric(
+                    "Лояльных (строгий)",
+                    f"{bert_stats['loyal_high']['count']:,}",
+                    f"{bert_stats['loyal_high']['percent']:.1f}%"
+                )
+
+            with col3:
+                st.metric(
+                    "Лояльных (средний)",
+                    f"{bert_stats['loyal_medium']['count']:,}",
+                    f"{bert_stats['loyal_medium']['percent']:.1f}%"
+                )
+
+            with col4:
+                st.metric(
+                    "Средняя вероятность",
+                    f"{bert_stats['avg_probability']:.3f}"
+                )
+
+            # Графики распределения
+            st.subheader("📈 Распределение вероятностей BERT")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Гистограмма вероятностей
+                fig = px.histogram(
+                    df,
+                    x='bert_loyalty_prob',
+                    nbins=50,
+                    title="Распределение вероятностей лояльности (BERT)",
+                    color_discrete_sequence=['#4ecdc4']
+                )
+                fig.add_vline(x=0.718, line_dash="dash", line_color="red", annotation_text="Строгий (0.718)")
+                fig.add_vline(x=0.55, line_dash="dash", line_color="orange", annotation_text="Средний (0.55)")
+                fig.add_vline(x=0.40, line_dash="dash", line_color="green", annotation_text="Мягкий (0.40)")
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col2:
+                # Сравнение порогов
+                threshold_data = pd.DataFrame({
+                    'Порог': ['Строгий\n(0.718)', 'Средний\n(0.55)', 'Мягкий\n(0.40)'],
+                    'Лояльных': [
+                        bert_stats['loyal_high']['count'],
+                        bert_stats['loyal_medium']['count'],
+                        bert_stats['loyal_low']['count']
+                    ],
+                    'Процент': [
+                        bert_stats['loyal_high']['percent'],
+                        bert_stats['loyal_medium']['percent'],
+                        bert_stats['loyal_low']['percent']
+                    ]
+                })
+                fig = px.bar(
+                    threshold_data,
+                    x='Порог',
+                    y='Лояльных',
+                    title="Влияние порога на количество лояльных",
+                    color='Процент',
+                    color_continuous_scale='RdYlGn',
+                    text='Лояльных'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Сравнение с keyword методом
+            if 'loyalty_score' in df.columns:
+                st.subheader("🔬 Сравнение: BERT vs Keyword метод")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    # Scatter plot
+                    sample_df = df.sample(min(5000, len(df)))
+                    fig = px.scatter(
+                        sample_df,
+                        x='loyalty_score',
+                        y='bert_loyalty_prob',
+                        color='bert_loyalty_class',
+                        opacity=0.5,
+                        title="Keyword Loyalty Score vs BERT вероятность",
+                        labels={
+                            'loyalty_score': 'Keyword Loyalty Score',
+                            'bert_loyalty_prob': 'BERT Вероятность',
+                            'bert_loyalty_class': 'BERT Класс'
+                        },
+                        color_discrete_map={'loyal': '#51cf66', 'not_loyal': '#ff6b6b'}
+                    )
+                    fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                                line=dict(color="gray", dash="dash"))
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with col2:
+                    # Корреляция и статистика
+                    comparison = compare_with_keyword_method(df)
+                    if not comparison.empty:
+                        st.markdown("**Сравнительная статистика:**")
+                        st.dataframe(comparison, use_container_width=True, hide_index=True)
+
+                    # Корреляция
+                    corr = df['bert_loyalty_prob'].corr(df['loyalty_score'])
+                    st.metric("Корреляция между методами", f"{corr:.3f}")
+
+                    # Диссонансы
+                    high_keyword_low_bert = df[
+                        (df['loyalty_score'] > 0.8) &
+                        (df['bert_loyalty_prob'] < 0.4)
+                    ]
+                    low_keyword_high_bert = df[
+                        (df['loyalty_score'] < 0.5) &
+                        (df['bert_loyalty_prob'] > 0.7)
+                    ]
+
+                    st.markdown("**Диссонансы между методами:**")
+                    st.write(f"• High Keyword / Low BERT: {len(high_keyword_low_bert):,}")
+                    st.write(f"• Low Keyword / High BERT: {len(low_keyword_high_bert):,}")
+
+            # Относительный анализ по продуктам (z-score как у друга)
+            if 'product_name' in df.columns:
+                st.subheader("🏆 Относительный анализ продуктов (z-score)")
+
+                min_reviews_product = st.slider(
+                    "Минимум отзывов на продукт",
+                    min_value=20,
+                    max_value=200,
+                    value=100,
+                    step=10,
+                    key="bert_min_reviews"
+                )
+
+                if st.button("🔄 Рассчитать относительные показатели"):
+                    with st.spinner("Расчёт z-score и байесовских баллов..."):
+                        product_stats = bert_analyzer.calculate_product_stats(df, min_reviews=min_reviews_product)
+
+                        if not product_stats.empty:
+                            st.session_state['bert_product_stats'] = product_stats
+                            st.success(f"✅ Проанализировано {len(product_stats)} продуктов")
+                        else:
+                            st.warning("Нет продуктов с достаточным количеством отзывов")
+
+                # Показываем результаты если есть
+                if 'bert_product_stats' in st.session_state:
+                    product_stats = st.session_state['bert_product_stats']
+
+                    # Метрики
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        st.metric("Проанализировано продуктов", f"{len(product_stats):,}")
+
+                    with col2:
+                        global_loyalty = product_stats['loyal_high'].sum() / product_stats['total_reviews'].sum()
+                        st.metric("Средняя лояльность", f"{global_loyalty:.1%}")
+
+                    with col3:
+                        best_z = product_stats['z_score'].max()
+                        st.metric("Лучший z-score", f"{best_z:.2f}")
+
+                    with col4:
+                        above_avg = (product_stats['z_score'] >= 1).sum()
+                        st.metric("Выше среднего", f"{above_avg}")
+
+                    # Топ и худшие
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown("**🏆 Топ-10 по относительной лояльности (z-score):**")
+                        top_10 = product_stats.head(10)[
+                            ['product_name', 'total_reviews', 'loyalty_rate_high', 'z_score', 'relative_category']
+                        ].copy()
+                        top_10['loyalty_rate_high'] = top_10['loyalty_rate_high'].apply(lambda x: f"{x:.1%}")
+                        top_10['z_score'] = top_10['z_score'].apply(lambda x: f"{x:.2f}")
+                        st.dataframe(top_10, use_container_width=True, hide_index=True)
+
+                    with col2:
+                        st.markdown("**⚠️ Проблемные продукты (низкий z-score):**")
+                        bottom_10 = product_stats.tail(10)[
+                            ['product_name', 'total_reviews', 'loyalty_rate_high', 'z_score', 'relative_category']
+                        ].copy()
+                        bottom_10['loyalty_rate_high'] = bottom_10['loyalty_rate_high'].apply(lambda x: f"{x:.1%}")
+                        bottom_10['z_score'] = bottom_10['z_score'].apply(lambda x: f"{x:.2f}")
+                        st.dataframe(bottom_10, use_container_width=True, hide_index=True)
+
+                    # График распределения z-scores
+                    fig = px.histogram(
+                        product_stats,
+                        x='z_score',
+                        nbins=30,
+                        title="Распределение z-scores (относительная лояльность)",
+                        color_discrete_sequence=['#4ecdc4']
+                    )
+                    fig.add_vline(x=0, line_dash="solid", line_color="red", annotation_text="Среднее")
+                    fig.add_vline(x=1, line_dash="dash", line_color="green", annotation_text="Выше среднего")
+                    fig.add_vline(x=-1, line_dash="dash", line_color="orange", annotation_text="Ниже среднего")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Scatter: z-score vs количество отзывов
+                    fig = px.scatter(
+                        product_stats,
+                        x='total_reviews',
+                        y='z_score',
+                        color='relative_category',
+                        size='loyalty_rate_high',
+                        hover_name='product_name',
+                        title="Z-score vs Количество отзывов",
+                        log_x=True,
+                        color_discrete_map={
+                            '🚀 Выдающийся': '#2ecc71',
+                            '📈 Выше среднего': '#27ae60',
+                            '📊 Средний': '#f39c12',
+                            '⚠️ Ниже среднего': '#e74c3c',
+                            '🔥 Проблемный': '#c0392b'
+                        }
+                    )
+                    fig.add_hline(y=0, line_dash="solid", line_color="red")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Категории
+                    st.markdown("**📊 Распределение по категориям относительной лояльности:**")
+                    cat_counts = product_stats['relative_category'].value_counts()
+                    cat_df = pd.DataFrame({
+                        'Категория': cat_counts.index,
+                        'Количество': cat_counts.values,
+                        'Процент': (cat_counts.values / len(product_stats) * 100).round(1)
+                    })
+                    st.dataframe(cat_df, use_container_width=True, hide_index=True)
+
+                    # Экспорт
+                    st.markdown("**📥 Экспорт:**")
+                    csv = product_stats.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "Скачать относительный анализ продуктов (CSV)",
+                        csv,
+                        "bert_product_stats.csv",
+                        "text/csv"
+                    )
 
     # === TAB 5: ОТЗЫВЫ ===
     with tab5:

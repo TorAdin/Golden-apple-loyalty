@@ -9,10 +9,10 @@ from typing import Optional, Dict, Any
 
 def load_data(file_path: Optional[str] = None) -> pd.DataFrame:
     """
-    Загрузка данных из xlsx файла
+    Загрузка данных из xlsx или csv файла
 
     Args:
-        file_path: Путь к файлу. По умолчанию ищет в data/data_darling.xlsx
+        file_path: Путь к файлу. По умолчанию ищет в data/ (сначала CSV, потом XLSX)
 
     Returns:
         DataFrame с отзывами
@@ -20,15 +20,29 @@ def load_data(file_path: Optional[str] = None) -> pd.DataFrame:
     if file_path is None:
         # Ищем файл относительно корня проекта
         project_root = Path(__file__).parent.parent
-        file_path = project_root / "data" / "data_darling.xlsx"
+
+        # Приоритет: final_data_darling.csv, затем data_darling.xlsx
+        csv_path = project_root / "final_data_darling.csv"
+        xlsx_path = project_root / "data" / "data_darling.xlsx"
+
+        if csv_path.exists():
+            file_path = csv_path
+            print(f"Загружаем final_data_darling.csv с расширенными фичами лояльности")
+        elif xlsx_path.exists():
+            file_path = xlsx_path
+        else:
+            file_path = xlsx_path  # Для корректного сообщения об ошибке
 
     file_path = Path(file_path)
 
     if not file_path.exists():
         raise FileNotFoundError(f"Файл не найден: {file_path}")
 
-    # Загружаем данные
-    df = pd.read_excel(file_path, engine='openpyxl')
+    # Загружаем данные в зависимости от расширения
+    if file_path.suffix.lower() == '.csv':
+        df = pd.read_csv(file_path)
+    else:
+        df = pd.read_excel(file_path, engine='openpyxl')
 
     # Проверяем и стандартизируем колонки
     df = _standardize_columns(df)
@@ -52,7 +66,14 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
         'CreatedDate': 'created_date'
     }
 
-    # Переименовываем колонки если они совпадают
+    # Список расширенных колонок, которые НЕ нужно переименовывать
+    advanced_columns = [
+        'Repurchase_Intent_Tag', 'Abandonment_Tag', 'Misexpectation_Type',
+        'Advocacy_Strength', 'Price_Sensitivity_Tag', 'Alternative_Brand_Mentioned',
+        'Affection_Trigger', 'Review_Purpose', 'Review_Emotion_Class'
+    ]
+
+    # Переименовываем только базовые колонки
     rename_map = {}
     for old_name, new_name in expected_columns.items():
         if old_name in df.columns:
